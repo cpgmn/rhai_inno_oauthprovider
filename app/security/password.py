@@ -46,16 +46,12 @@ import hashlib
 def verify_password(password: str, password_hash: str) -> bool:
     """Verify a password against the legacy SHA-256 hash."""
 
-
-    print(password)
     
     salted_pwd = password + "y"
     computed_hash = hashlib.sha256(
         salted_pwd.encode()
     ).hexdigest()
     
-    print("Computed hash:", computed_hash)
-    print("Stored hash:", password_hash)
 
     return computed_hash == password_hash
 

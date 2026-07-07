@@ -9,6 +9,8 @@ from app.models.orm import User
 from app.security.password import verify_password
 
 
+
+
 def authenticate_user(db: Session, username: str, password: str) -> User | None:
     """Authenticate a user by username and password.
 
@@ -20,6 +22,8 @@ def authenticate_user(db: Session, username: str, password: str) -> User | None:
     Returns:
         User object if credentials are valid, None otherwise.
     """
+
+    
     # Look up user by username (email)
     user = db.query(User).filter(User.username == username).first()
 
@@ -43,6 +47,7 @@ def get_user_by_id(db: Session, user_id: int) -> User | None:
     Returns:
         User object or None if not found.
     """
+
     return db.query(User).filter(User.id == user_id).first()
 
 
