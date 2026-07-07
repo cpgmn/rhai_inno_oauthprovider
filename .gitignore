@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Credentials 
+config.yaml
+*.env
+*.pem
+/rhai_inno_oauthprovider.egg-info 
+.env.local
+.env.local
