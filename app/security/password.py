@@ -55,6 +55,3 @@ def verify_password(password: str, password_hash: str) -> bool:
 
     return computed_hash == password_hash
 
-
-# salted_pwd = pwd + "y"
-#     pwd_hash = hashlib.sha256(salted_pwd.encode()).hexdigest()11
