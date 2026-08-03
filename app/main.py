@@ -19,6 +19,11 @@ def create_app() -> FastAPI:
 
     Initializes the database, registers routers, and configures middleware.
 
+    When URL_PREFIX is set (e.g. "/oauth_issuer"), all routes are mounted under
+    that prefix so the provider is reachable at {prefix}/login, {prefix}/oauth/…
+    etc.  When URL_PREFIX is empty (default) routes are mounted at the root, so
+    no existing deployments are affected.
+
     Returns:
         Configured FastAPI application.
     """
@@ -26,13 +31,19 @@ def create_app() -> FastAPI:
         title="Identity Provider",
         description="OpenID Connect Compatible Identity Provider",
         version="1.0.0",
-        root_path=settings.prefix,
     )
 
     @app.get("/")
     async def root() -> RedirectResponse:
-        """Redirect root requests to login page instead of returning 404."""
+        """Redirect bare-root requests to the login page."""
         return RedirectResponse(url=settings.prefix + "/login", status_code=302)
+
+    if settings.prefix:
+        # Also handle GET {prefix}/ so browsers that land on the prefixed root
+        # are redirected cleanly instead of receiving a 404.
+        @app.get(settings.prefix + "/")
+        async def prefixed_root() -> RedirectResponse:
+            return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     # CORS middleware (allow all origins for development)
     app.add_middleware(

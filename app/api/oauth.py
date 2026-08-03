@@ -3,6 +3,7 @@
 Implements authorization code flow, token exchange, and userinfo endpoints.
 """
 
+import logging
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -41,6 +42,7 @@ from app.security.validation import (
 from app.auth.service import get_user_by_id
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/authorize")
@@ -82,7 +84,7 @@ async def authorize_get(
         - If user logged in: Authorization code and redirect to redirect_uri
         - If parameters invalid: OAuth error response
     """
-    print(
+    logger.info(
         "[oauth.authorize] "
         f"client_id={client_id!r} "
         f"redirect_uri={redirect_uri!r} "
@@ -91,6 +93,11 @@ async def authorize_get(
 
     # Validate response_type
     if response_type != "code":
+        logger.warning(
+            "[oauth.authorize] invalid response_type client_id=%r response_type=%r",
+            client_id,
+            response_type,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -102,6 +109,7 @@ async def authorize_get(
     # Validate and fetch OAuth client
     client = get_oauth_client(db, client_id)
     if not client:
+        logger.warning("[oauth.authorize] unknown client_id=%r", client_id)
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -112,6 +120,11 @@ async def authorize_get(
 
     # Validate redirect_uri
     if not is_valid_redirect_uri(redirect_uri):
+        logger.warning(
+            "[oauth.authorize] invalid redirect_uri format client_id=%r redirect_uri=%r",
+            client_id,
+            redirect_uri,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -121,6 +134,11 @@ async def authorize_get(
         )
 
     if not validate_redirect_uri(redirect_uri, client.redirect_uris):
+        logger.warning(
+            "[oauth.authorize] redirect_uri not registered client_id=%r redirect_uri=%r",
+            client_id,
+            redirect_uri,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -132,6 +150,12 @@ async def authorize_get(
     # Validate scopes
     is_valid, granted_scopes = validate_scope(scope, client.scopes)
     if not is_valid:
+        logger.warning(
+            "[oauth.authorize] invalid scope client_id=%r requested_scope=%r allowed_scopes=%r",
+            client_id,
+            scope,
+            client.scopes,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -157,6 +181,11 @@ async def authorize_get(
             **({"code_challenge_method": code_challenge_method} if code_challenge_method else {}),
         })
         login_url = settings.prefix + "/login?" + urlencode({"redirect_to": original_url})
+        logger.info(
+            "[oauth.authorize] no session redirect login client_id=%r login_url=%r",
+            client_id,
+            login_url,
+        )
         return RedirectResponse(url=login_url, status_code=302)
 
     # User is logged in – auto-approve and generate authorization code
@@ -177,8 +206,14 @@ async def authorize_get(
             **({"code_challenge": code_challenge} if code_challenge else {}),
             **({"code_challenge_method": code_challenge_method} if code_challenge_method else {}),
         })
+        consent_url = settings.prefix + "/consent?" + urlencode({"next": original_url})
+        logger.info(
+            "[oauth.authorize] onboarding required redirect consent user_id=%r consent_url=%r",
+            user_id,
+            consent_url,
+        )
         return RedirectResponse(
-            url=settings.prefix + "/consent?" + urlencode({"next": original_url}),
+            url=consent_url,
             status_code=302,
         )
 
@@ -204,6 +239,12 @@ async def authorize_get(
 
     # Redirect to callback URI with authorization code and state
     callback_url = f"{redirect_uri}?code={code}&state={state}"
+    logger.info(
+        "[oauth.authorize] issue code redirect callback user_id=%r client_id=%r callback_url=%r",
+        user_id,
+        client_id,
+        callback_url,
+    )
     return RedirectResponse(url=callback_url, status_code=302)
 
 

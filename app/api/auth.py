@@ -1,5 +1,6 @@
 """Authentication endpoints: login form, POST login handler, registration, consent."""
 
+import logging
 import re
 from html import escape
 from urllib.parse import quote_plus, urlencode
@@ -15,6 +16,7 @@ from app.db.session import get_db
 from app.security.password import hash_password
 
 router = APIRouter(prefix="", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -32,6 +34,11 @@ async def login_page(request: Request) -> str:
     """
     redirect_to = request.query_params.get("redirect_to", settings.prefix + "/login")
     error = request.query_params.get("error", "")
+    logger.info(
+        "[auth.login_page] redirect_to=%r has_error=%r",
+        redirect_to,
+        bool(error),
+    )
 
     error_html = ""
     if error:
@@ -232,11 +239,17 @@ async def login_handler(
     Returns:
         Redirect response on success, or back to login with error.
     """
+    logger.info("[auth.login] attempt username=%r redirect_to=%r", username, redirect_to)
     user = authenticate_user(db, username, password)
 
     if not user:
         # Authentication failed – return to login with error message
         encoded_redirect = quote_plus(redirect_to)
+        logger.warning(
+            "[auth.login] failed username=%r redirect=%r",
+            username,
+            redirect_to,
+        )
         return RedirectResponse(
             url=settings.prefix + f"/login?error=Invalid+credentials&redirect_to={encoded_redirect}",
             status_code=302,
@@ -250,8 +263,15 @@ async def login_handler(
     # training, and reset their password if not yet registered) before they can
     # continue to the requested destination.
     if not user.registered or not user.accepted_tou:
+        consent_url = settings.prefix + f"/consent?redirect_to={quote_plus(redirect_to)}"
+        logger.info(
+            "[auth.login] onboarding redirect username=%r user_id=%r consent_url=%r",
+            username,
+            user.id,
+            consent_url,
+        )
         response = RedirectResponse(
-            url=settings.prefix + f"/consent?redirect_to={quote_plus(redirect_to)}",
+            url=consent_url,
             status_code=302,
         )
         response.set_cookie(
@@ -264,6 +284,12 @@ async def login_handler(
 
     # Keep redirects local and avoid non-existent root path fallback.
     target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else settings.prefix + "/login"
+    logger.info(
+        "[auth.login] success username=%r user_id=%r target_redirect=%r",
+        username,
+        user.id,
+        target_redirect,
+    )
 
     # Redirect to the requested URL (or default to home)
     response = RedirectResponse(url=target_redirect, status_code=302)
@@ -284,6 +310,27 @@ async def logout_handler(request: Request, redirect_to: str = "") -> RedirectRes
         delete_session(session_id)
 
     response = RedirectResponse(url=redirect_to or settings.prefix + "/login", status_code=302)
+    response.delete_cookie("session_id")
+    return response
+
+
+@router.get("/oauth/logout")
+async def oauth_logout_handler(
+    request: Request,
+    redirect_uri: str = "",
+    id_token_hint: str = "",
+) -> RedirectResponse:
+    """OIDC end-session endpoint.
+
+    Invalidates the provider session cookie and redirects to redirect_uri.
+    Compatible with the OIDC end_session_endpoint convention used by rhai_se.
+    """
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        delete_session(session_id)
+
+    target = redirect_uri or settings.prefix + "/login"
+    response = RedirectResponse(url=target, status_code=302)
     response.delete_cookie("session_id")
     return response
 
@@ -452,15 +499,31 @@ async def consent_page(request: Request, db: Session = Depends(get_db)):
             login_url = settings.prefix + "/login?" + urlencode({"redirect_to": settings.prefix + f"/consent?redirect_to={redirect_to}"})
         else:
             login_url = settings.prefix + "/login?redirect_to=" + settings.prefix + "/consent"
+        logger.info(
+            "[auth.consent_page] no session redirect login login_url=%r next=%r redirect_to=%r",
+            login_url,
+            next_url,
+            redirect_to,
+        )
         return RedirectResponse(url=login_url, status_code=302)
 
     user = get_user_by_id(db, session["user_id"])
     if not user:
+        logger.warning(
+            "[auth.consent_page] session user missing user_id=%r redirect=/login",
+            session.get("user_id"),
+        )
         return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     # Onboarding already complete – nothing to confirm.
     if user.registered and user.accepted_tou:
-        return RedirectResponse(url=next_url or redirect_to or settings.prefix + "/login", status_code=302)
+        target = next_url or redirect_to or settings.prefix + "/login"
+        logger.info(
+            "[auth.consent_page] onboarding complete redirect user_id=%r target=%r",
+            user.id,
+            target,
+        )
+        return RedirectResponse(url=target, status_code=302)
 
     error = request.query_params.get("error", "")
     if error == "pw_mismatch":
@@ -552,10 +615,15 @@ async def consent_handler(
     session_id = request.cookies.get("session_id")
     session = _get_session(session_id) if session_id else None
     if not session:
+        logger.info("[auth.consent_post] no session redirect=/login")
         return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     user = get_user_by_id(db, session["user_id"])
     if not user:
+        logger.warning(
+            "[auth.consent_post] session user missing user_id=%r redirect=/login",
+            session.get("user_id"),
+        )
         return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     def _error(code: str) -> RedirectResponse:
@@ -564,7 +632,14 @@ async def consent_handler(
             params["next"] = next
         elif redirect_to:
             params["redirect_to"] = redirect_to
-        return RedirectResponse(url=settings.prefix + "/consent?" + urlencode(params), status_code=302)
+        error_url = settings.prefix + "/consent?" + urlencode(params)
+        logger.info(
+            "[auth.consent_post] validation error user_id=%r code=%r redirect=%r",
+            user.id,
+            code,
+            error_url,
+        )
+        return RedirectResponse(url=error_url, status_code=302)
 
     if not ai_training or not accepted_tou:
         return _error("1")
@@ -582,8 +657,18 @@ async def consent_handler(
 
     # Redirect to the original target.
     if next and next.startswith(settings.prefix + "/oauth/authorize"):
+        logger.info(
+            "[auth.consent_post] success redirect next user_id=%r target=%r",
+            user.id,
+            next,
+        )
         return RedirectResponse(url=next, status_code=302)
     if redirect_to and redirect_to.startswith("/"):
+        logger.info(
+            "[auth.consent_post] success redirect redirect_to user_id=%r target=%r",
+            user.id,
+            redirect_to,
+        )
         return RedirectResponse(url=redirect_to, status_code=302)
+    logger.info("[auth.consent_post] success fallback redirect user_id=%r target=%r", user.id, settings.prefix + "/login")
     return RedirectResponse(url=settings.prefix + "/login", status_code=302)
-
