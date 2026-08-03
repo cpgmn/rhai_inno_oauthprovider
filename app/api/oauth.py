@@ -146,7 +146,7 @@ async def authorize_get(
 
     if not session:
         # User not logged in – redirect to login page
-        original_url = "/oauth/authorize?" + urlencode({
+        original_url = settings.prefix + "/oauth/authorize?" + urlencode({
             "client_id": client_id,
             "response_type": response_type,
             "redirect_uri": redirect_uri,
@@ -156,7 +156,7 @@ async def authorize_get(
             **({"code_challenge": code_challenge} if code_challenge else {}),
             **({"code_challenge_method": code_challenge_method} if code_challenge_method else {}),
         })
-        login_url = "/login?" + urlencode({"redirect_to": original_url})
+        login_url = settings.prefix + "/login?" + urlencode({"redirect_to": original_url})
         return RedirectResponse(url=login_url, status_code=302)
 
     # User is logged in – auto-approve and generate authorization code
@@ -167,7 +167,7 @@ async def authorize_get(
     # flow first (accept ToU, confirm AI training, reset password if needed).
     user = get_user_by_id(db, user_id)
     if user and (not user.registered or not user.accepted_tou):
-        original_url = "/oauth/authorize?" + urlencode({
+        original_url = settings.prefix + "/oauth/authorize?" + urlencode({
             "client_id": client_id,
             "response_type": response_type,
             "redirect_uri": redirect_uri,
@@ -178,7 +178,7 @@ async def authorize_get(
             **({"code_challenge_method": code_challenge_method} if code_challenge_method else {}),
         })
         return RedirectResponse(
-            url="/consent?" + urlencode({"next": original_url}),
+            url=settings.prefix + "/consent?" + urlencode({"next": original_url}),
             status_code=302,
         )
 

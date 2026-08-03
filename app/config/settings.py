@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     # Session cookie signing secret
     session_secret_key: str = "change-this-secret-in-production"
 
+    # URL prefix for all provider-internal paths (e.g. "" or "/iam").
+    # Set when the provider is mounted behind a reverse proxy at a sub-path.
+    url_prefix: str = ""
+
     # Token lifetimes
     access_token_expire_seconds: int = 3600         # 1 hour
     refresh_token_expire_seconds: int = 2_592_000   # 30 days
@@ -186,8 +190,22 @@ class Settings(BaseSettings):
             "POSTGRES_PASSWORD" not in env_file_vars and
             "DB_PASSWORD" in yaml_config):
             self.postgres_password = yaml_config["DB_PASSWORD"]
-        
+
+        # URL_PREFIX
+        if (not os.getenv("URL_PREFIX") and
+                "URL_PREFIX" not in env_file_vars and
+                "URL_PREFIX" in yaml_config):
+            self.url_prefix = yaml_config["URL_PREFIX"]
+
         return self
+
+    @property
+    def prefix(self) -> str:
+        """Normalised URL prefix: no trailing slash, empty or starts with /."""
+        p = self.url_prefix.rstrip("/")
+        if p and not p.startswith("/"):
+            p = "/" + p
+        return p
 
     @property
     def database_url(self) -> str:

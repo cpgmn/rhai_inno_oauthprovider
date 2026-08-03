@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.service import authenticate_user, register_user_request, accept_user_consent, get_user_by_id
 from app.auth.session import create_session, delete_session
+from app.config.settings import settings
 from app.db.session import get_db
 from app.security.password import hash_password
 
@@ -29,7 +30,7 @@ async def login_page(request: Request) -> str:
     Returns:
         HTML form page.
     """
-    redirect_to = request.query_params.get("redirect_to", "/login")
+    redirect_to = request.query_params.get("redirect_to", settings.prefix + "/login")
     error = request.query_params.get("error", "")
 
     error_html = ""
@@ -200,7 +201,7 @@ async def login_page(request: Request) -> str:
                     </div>
                     <input type="hidden" name="redirect_to" value="{safe_redirect_to}">
                     <button class="btn-login" type="submit">Sign in</button>
-                    <a href="/register" style="display:block;text-align:center;margin-top:16px;font-size:13px;color:var(--rm-light-blue);text-decoration:none;">Request access &rarr;</a>
+                    <a href="{settings.prefix}/register" style="display:block;text-align:center;margin-top:16px;font-size:13px;color:var(--rm-light-blue);text-decoration:none;">Request access &rarr;</a>
                 </form>
             </div>
             <p class="footer-note">RhAISE &mdash; Rheinmetall AI Engineering Suite</p>
@@ -237,7 +238,7 @@ async def login_handler(
         # Authentication failed – return to login with error message
         encoded_redirect = quote_plus(redirect_to)
         return RedirectResponse(
-            url=f"/login?error=Invalid+credentials&redirect_to={encoded_redirect}",
+            url=settings.prefix + f"/login?error=Invalid+credentials&redirect_to={encoded_redirect}",
             status_code=302,
         )
 
@@ -250,7 +251,7 @@ async def login_handler(
     # continue to the requested destination.
     if not user.registered or not user.accepted_tou:
         response = RedirectResponse(
-            url=f"/consent?redirect_to={quote_plus(redirect_to)}",
+            url=settings.prefix + f"/consent?redirect_to={quote_plus(redirect_to)}",
             status_code=302,
         )
         response.set_cookie(
@@ -262,7 +263,7 @@ async def login_handler(
         return response
 
     # Keep redirects local and avoid non-existent root path fallback.
-    target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else "/login"
+    target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else settings.prefix + "/login"
 
     # Redirect to the requested URL (or default to home)
     response = RedirectResponse(url=target_redirect, status_code=302)
@@ -276,13 +277,13 @@ async def login_handler(
 
 
 @router.get("/logout")
-async def logout_handler(request: Request, redirect_to: str = "/login") -> RedirectResponse:
+async def logout_handler(request: Request, redirect_to: str = "") -> RedirectResponse:
     """Clear provider session cookie and invalidate DB session row."""
     session_id = request.cookies.get("session_id")
     if session_id:
         delete_session(session_id)
 
-    response = RedirectResponse(url=redirect_to, status_code=302)
+    response = RedirectResponse(url=redirect_to or settings.prefix + "/login", status_code=302)
     response.delete_cookie("session_id")
     return response
 
@@ -392,7 +393,7 @@ async def register_page(request: Request) -> str:
             </div>
             <button class="btn-primary" type="submit">Request Access</button>
         </form>
-        <a class="btn-secondary" href="/login">&larr; Back to Login</a>
+        <a class="btn-secondary" href="{settings.prefix}/login">&larr; Back to Login</a>
     """
     return _html_page("Request Access", body)
 
@@ -406,15 +407,15 @@ async def register_handler(
     email_val = email.strip().lower()
     email_pattern = r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$"
     if not email_val or not re.match(email_pattern, email_val):
-        return RedirectResponse(url="/register?status=invalid", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/register?status=invalid", status_code=302)
 
     success, reason = register_user_request(db, email_val)
     if not success and reason == "already_exists":
-        return RedirectResponse(url="/register?status=exists", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/register?status=exists", status_code=302)
     if not success:
-        return RedirectResponse(url="/register?status=error", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/register?status=error", status_code=302)
 
-    return RedirectResponse(url="/register?status=success", status_code=302)
+    return RedirectResponse(url=settings.prefix + "/register?status=success", status_code=302)
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +437,7 @@ async def consent_page(request: Request, db: Session = Depends(get_db)):
 
     next_url = request.query_params.get("next", "")
     # Validate next URL: must be an internal /oauth/authorize path
-    if not next_url.startswith("/oauth/authorize"):
+    if not next_url.startswith(settings.prefix + "/oauth/authorize"):
         next_url = ""
 
     redirect_to = request.query_params.get("redirect_to", "")
@@ -446,20 +447,20 @@ async def consent_page(request: Request, db: Session = Depends(get_db)):
 
     if not session:
         if next_url:
-            login_url = "/login?" + urlencode({"redirect_to": f"/consent?next={next_url}"})
+            login_url = settings.prefix + "/login?" + urlencode({"redirect_to": settings.prefix + f"/consent?next={next_url}"})
         elif redirect_to:
-            login_url = "/login?" + urlencode({"redirect_to": f"/consent?redirect_to={redirect_to}"})
+            login_url = settings.prefix + "/login?" + urlencode({"redirect_to": settings.prefix + f"/consent?redirect_to={redirect_to}"})
         else:
-            login_url = "/login?redirect_to=/consent"
+            login_url = settings.prefix + "/login?redirect_to=" + settings.prefix + "/consent"
         return RedirectResponse(url=login_url, status_code=302)
 
     user = get_user_by_id(db, session["user_id"])
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     # Onboarding already complete – nothing to confirm.
     if user.registered and user.accepted_tou:
-        return RedirectResponse(url=next_url or redirect_to or "/login", status_code=302)
+        return RedirectResponse(url=next_url or redirect_to or settings.prefix + "/login", status_code=302)
 
     error = request.query_params.get("error", "")
     if error == "pw_mismatch":
@@ -551,11 +552,11 @@ async def consent_handler(
     session_id = request.cookies.get("session_id")
     session = _get_session(session_id) if session_id else None
     if not session:
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     user = get_user_by_id(db, session["user_id"])
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     def _error(code: str) -> RedirectResponse:
         params: dict[str, str] = {"error": code}
@@ -563,7 +564,7 @@ async def consent_handler(
             params["next"] = next
         elif redirect_to:
             params["redirect_to"] = redirect_to
-        return RedirectResponse(url="/consent?" + urlencode(params), status_code=302)
+        return RedirectResponse(url=settings.prefix + "/consent?" + urlencode(params), status_code=302)
 
     if not ai_training or not accepted_tou:
         return _error("1")
@@ -580,9 +581,9 @@ async def consent_handler(
     accept_user_consent(db, user.id)
 
     # Redirect to the original target.
-    if next and next.startswith("/oauth/authorize"):
+    if next and next.startswith(settings.prefix + "/oauth/authorize"):
         return RedirectResponse(url=next, status_code=302)
     if redirect_to and redirect_to.startswith("/"):
         return RedirectResponse(url=redirect_to, status_code=302)
-    return RedirectResponse(url="/login", status_code=302)
+    return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 

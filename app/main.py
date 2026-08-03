@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import auth, discovery, health, oauth
+from app.config.settings import settings
 from app.db.session import init_db
 from app.models.schemas import ErrorResponse
 
@@ -25,12 +26,13 @@ def create_app() -> FastAPI:
         title="Identity Provider",
         description="OpenID Connect Compatible Identity Provider",
         version="1.0.0",
+        root_path=settings.prefix,
     )
 
     @app.get("/")
     async def root() -> RedirectResponse:
         """Redirect root requests to login page instead of returning 404."""
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url=settings.prefix + "/login", status_code=302)
 
     # CORS middleware (allow all origins for development)
     app.add_middleware(
