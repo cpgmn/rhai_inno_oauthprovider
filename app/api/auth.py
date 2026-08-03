@@ -2,7 +2,7 @@
 
 import re
 from html import escape
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.service import authenticate_user, register_user_request, accept_user_consent, get_user_by_id
 from app.auth.session import create_session, delete_session
 from app.db.session import get_db
+from app.security.password import hash_password
 
 router = APIRouter(prefix="", tags=["auth"])
 
@@ -240,11 +241,28 @@ async def login_handler(
             status_code=302,
         )
 
-    # Keep redirects local and avoid non-existent root path fallback.
-    target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else "/login"
-
     # Create session for authenticated user
     session_id = create_session(user.id)
+
+    # Enforce onboarding: users who are not registered or have not accepted the
+    # Terms of Use must complete the consent flow (accept ToU, confirm AI
+    # training, and reset their password if not yet registered) before they can
+    # continue to the requested destination.
+    if not user.registered or not user.accepted_tou:
+        response = RedirectResponse(
+            url=f"/consent?redirect_to={quote_plus(redirect_to)}",
+            status_code=302,
+        )
+        response.set_cookie(
+            key="session_id",
+            value=session_id,
+            httponly=True,
+            max_age=3600,  # 1 hour
+        )
+        return response
+
+    # Keep redirects local and avoid non-existent root path fallback.
+    target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else "/login"
 
     # Redirect to the requested URL (or default to home)
     response = RedirectResponse(url=target_redirect, status_code=302)
@@ -297,7 +315,7 @@ _SHARED_STYLES = """
     .form-group { margin-bottom: 16px; }
     .form-group label { display: block; font-size: 13px; font-weight: 500;
         color: var(--rm-dark-grey); margin-bottom: 6px; }
-    .form-group input[type=email], .form-group input[type=text] {
+    .form-group input[type=email], .form-group input[type=text], .form-group input[type=password] {
         width: 100%; padding: 10px 12px; border: 1px solid var(--rm-medium-grey);
         border-radius: var(--radius-m); font-family: var(--font-base); font-size: 14px;
         color: var(--rm-dark-grey); outline: none; }
@@ -404,11 +422,13 @@ async def register_handler(
 # ---------------------------------------------------------------------------
 
 @router.get("/consent", response_class=HTMLResponse)
-async def consent_page(request: Request) -> str:
+async def consent_page(request: Request, db: Session = Depends(get_db)):
     """Display the Terms of Use and AI training consent form.
 
-    Requires an active provider session. The `next` query parameter holds the
-    URL to redirect to after consent is accepted (must start with /oauth/authorize).
+    Requires an active provider session. After consent the user is sent to the
+    original target: the `next` query parameter (an /oauth/authorize URL) when
+    present, otherwise the internal `redirect_to` path. Users who are not yet
+    registered must also set a new password here.
     """
     session_id = request.cookies.get("session_id")
     from app.auth.session import get_session as _get_session
@@ -419,14 +439,56 @@ async def consent_page(request: Request) -> str:
     if not next_url.startswith("/oauth/authorize"):
         next_url = ""
 
+    redirect_to = request.query_params.get("redirect_to", "")
+    # Validate redirect_to: must be an internal path
+    if not redirect_to.startswith("/"):
+        redirect_to = ""
+
     if not session:
-        login_url = "/login?" + (f"redirect_to=/consent?next={quote_plus(next_url)}" if next_url else "redirect_to=/consent")
+        if next_url:
+            login_url = "/login?" + urlencode({"redirect_to": f"/consent?next={next_url}"})
+        elif redirect_to:
+            login_url = "/login?" + urlencode({"redirect_to": f"/consent?redirect_to={redirect_to}"})
+        else:
+            login_url = "/login?redirect_to=/consent"
         return RedirectResponse(url=login_url, status_code=302)
 
+    user = get_user_by_id(db, session["user_id"])
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # Onboarding already complete – nothing to confirm.
+    if user.registered and user.accepted_tou:
+        return RedirectResponse(url=next_url or redirect_to or "/login", status_code=302)
+
     error = request.query_params.get("error", "")
-    error_html = '<div class="alert alert-danger">Please accept all items before continuing.</div>' if error else ""
+    if error == "pw_mismatch":
+        error_html = '<div class="alert alert-danger">Passwords do not match.</div>'
+    elif error == "pw_required":
+        error_html = '<div class="alert alert-danger">Please choose a new password.</div>'
+    elif error:
+        error_html = '<div class="alert alert-danger">Please accept all items before continuing.</div>'
+    else:
+        error_html = ""
 
     safe_next = escape(next_url, quote=True)
+    safe_redirect_to = escape(redirect_to, quote=True)
+
+    # Unregistered users must set a new password as part of onboarding.
+    password_html = ""
+    if not user.registered:
+        password_html = """
+            <div class="form-group">
+                <label for="new_password">New Password</label>
+                <input type="password" id="new_password" name="new_password"
+                       required autocomplete="new-password">
+            </div>
+            <div class="form-group">
+                <label for="confirm_password">Confirm New Password</label>
+                <input type="password" id="confirm_password" name="confirm_password"
+                       required autocomplete="new-password">
+            </div>
+        """
 
     body = f"""
         <h2>Terms of Use &amp; AI Training</h2>
@@ -449,6 +511,8 @@ async def consent_page(request: Request) -> str:
         </div>
         <form method="POST" style="margin-top:20px">
             <input type="hidden" name="next" value="{safe_next}">
+            <input type="hidden" name="redirect_to" value="{safe_redirect_to}">
+            {password_html}
             <div class="check-group">
                 <input type="checkbox" id="ai-check" name="ai_training" value="1" required>
                 <label for="ai-check">I have completed the AI training
@@ -468,11 +532,20 @@ async def consent_page(request: Request) -> str:
 async def consent_handler(
     request: Request,
     next: str = Form(""),
+    redirect_to: str = Form(""),
     ai_training: str = Form(""),
     accepted_tou: str = Form(""),
+    new_password: str = Form(""),
+    confirm_password: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    """Handle consent form submission."""
+    """Handle consent form submission.
+
+    Requires acceptance of the Terms of Use and confirmation of AI-training
+    participation. Users who are not yet registered must also provide a matching
+    new password. On success, registered and accepted_tou are set to True (and
+    the password is updated for unregistered users).
+    """
     from app.auth.session import get_session as _get_session
 
     session_id = request.cookies.get("session_id")
@@ -480,16 +553,36 @@ async def consent_handler(
     if not session:
         return RedirectResponse(url="/login", status_code=302)
 
+    user = get_user_by_id(db, session["user_id"])
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    def _error(code: str) -> RedirectResponse:
+        params: dict[str, str] = {"error": code}
+        if next:
+            params["next"] = next
+        elif redirect_to:
+            params["redirect_to"] = redirect_to
+        return RedirectResponse(url="/consent?" + urlencode(params), status_code=302)
+
     if not ai_training or not accepted_tou:
-        safe_next = quote_plus(next) if next else ""
-        error_url = f"/consent?error=1&next={safe_next}" if safe_next else "/consent?error=1"
-        return RedirectResponse(url=error_url, status_code=302)
+        return _error("1")
 
-    user_id = session["user_id"]
-    accept_user_consent(db, user_id)
+    # Unregistered users must set a new password to complete onboarding.
+    if not user.registered:
+        if not new_password or not confirm_password:
+            return _error("pw_required")
+        if new_password != confirm_password:
+            return _error("pw_mismatch")
+        user.password_hash = hash_password(new_password)
 
-    # Validate and redirect to original authorize URL
+    # Sets registered=True and accepted_tou=True (commits any password change too).
+    accept_user_consent(db, user.id)
+
+    # Redirect to the original target.
     if next and next.startswith("/oauth/authorize"):
         return RedirectResponse(url=next, status_code=302)
+    if redirect_to and redirect_to.startswith("/"):
+        return RedirectResponse(url=redirect_to, status_code=302)
     return RedirectResponse(url="/login", status_code=302)
 
