@@ -186,7 +186,7 @@ async def login_page(request: Request) -> str:
         <div class="page-wrapper">
             <div class="login-card">
                 <div class="logo-area">
-                    <img src="/static/logo.png" alt="RhAISE Logo">
+                    <img src="{settings.prefix}/static/logo.png" alt="RhAISE Logo">
                 </div>
                 <h2>Sign in to RhAISE</h2>
                 {error_html}
@@ -357,7 +357,7 @@ def _html_page(title: str, body: str) -> str:
 <body>
     <div class="page-wrapper">
         <div class="card">
-            <div class="logo-area"><img src="/static/logo.png" alt="RhAISE Logo"></div>
+            <div class="logo-area"><img src="{settings.prefix}/static/logo.png" alt="RhAISE Logo"></div>
             {body}
         </div>
         <p class="footer-note">RhAISE &mdash; Rheinmetall AI Engineering Suite</p>
