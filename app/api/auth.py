@@ -440,7 +440,7 @@ async def register_page(request: Request) -> str:
             </div>
             <button class="btn-primary" type="submit">Request Access</button>
         </form>
-        <a class="btn-secondary" href="{settings.prefix}/login">&larr; Back to Login</a>
+        <a class="btn-secondary" href="/login">&larr; Back to Login</a>
     """
     return _html_page("Request Access", body)
 
