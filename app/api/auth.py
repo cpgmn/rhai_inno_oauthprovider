@@ -251,7 +251,7 @@ async def login_handler(
             redirect_to,
         )
         return RedirectResponse(
-            url=settings.prefix + f"/login?error=Invalid+credentials&redirect_to={encoded_redirect}",
+            url=f"{settings.prefix}/login?error=Invalid+credentials&redirect_to={encoded_redirect}",
             status_code=302,
         )
 
@@ -263,7 +263,7 @@ async def login_handler(
     # training, and reset their password if not yet registered) before they can
     # continue to the requested destination.
     if not user.registered or not user.accepted_tou:
-        consent_url = settings.prefix + f"/consent?redirect_to={quote_plus(redirect_to)}"
+        consent_url =f"{settings.prefix}/consent?redirect_to={quote_plus(redirect_to)}"
         logger.info(
             "[auth.login] onboarding redirect username=%r user_id=%r consent_url=%r",
             username,
@@ -283,7 +283,7 @@ async def login_handler(
         return response
 
     # Keep redirects local and avoid non-existent root path fallback.
-    target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else settings.prefix + "/login"
+    target_redirect = redirect_to if redirect_to.startswith("/") and redirect_to != "/" else f"{settings.prefix}/login"
     logger.info(
         "[auth.login] success username=%r user_id=%r target_redirect=%r",
         username,

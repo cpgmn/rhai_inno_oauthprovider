@@ -31,19 +31,20 @@ def create_app() -> FastAPI:
         title="Identity Provider",
         description="OpenID Connect Compatible Identity Provider",
         version="1.0.0",
+        root_path=settings.prefix,
     )
 
     @app.get("/")
     async def root() -> RedirectResponse:
         """Redirect bare-root requests to the login page."""
-        return RedirectResponse(url=settings.prefix + "/login", status_code=302)
+        return RedirectResponse(url="/login", status_code=302)
 
     if settings.prefix:
         # Also handle GET {prefix}/ so browsers that land on the prefixed root
         # are redirected cleanly instead of receiving a 404.
         @app.get(settings.prefix + "/")
         async def prefixed_root() -> RedirectResponse:
-            return RedirectResponse(url=settings.prefix + "/login", status_code=302)
+            return RedirectResponse(url="/login", status_code=302)
 
     # CORS middleware (allow all origins for development)
     app.add_middleware(
@@ -96,13 +97,13 @@ def create_app() -> FastAPI:
     # Serve static assets (logo, etc.)
     static_dir = Path(__file__).parent / "static"
     static_dir.mkdir(exist_ok=True)
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.mount( settings.prefix + "/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # Register routers
-    app.include_router(health.router)
-    app.include_router(discovery.router)
-    app.include_router(auth.router)
-    app.include_router(oauth.router)
+    app.include_router(health.router, prefix=settings.prefix)
+    app.include_router(discovery.router, prefix=settings.prefix)
+    app.include_router(auth.router, prefix=settings.prefix)
+    app.include_router(oauth.router, prefix=settings.prefix)
 
     return app
 
