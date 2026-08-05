@@ -250,10 +250,11 @@ async def authorize_get(
 
 @router.post("/token")
 async def token_endpoint(
-    grant_type: str = Form(...),
+    request: Request,
+    grant_type: str | None = Form(None),
     code: str | None = Form(None),
     redirect_uri: str | None = Form(None),
-    client_id: str = Form(...),
+    client_id: str | None = Form(None),
     client_secret: str | None = Form(None),
     code_verifier: str | None = Form(None),
     refresh_token: str | None = Form(None),
@@ -264,29 +265,27 @@ async def token_endpoint(
     Accepts form-encoded OAuth 2.0 token request per RFC 6749.
     Exchanges authorization codes for access/ID/refresh tokens.
     Also handles refresh token exchanges.
-
-    Args:
-        grant_type: 'authorization_code' or 'refresh_token'.
-        code: Authorization code (required for authorization_code grant).
-        redirect_uri: Must match the authorization request.
-        client_id: OAuth client identifier.
-        client_secret: Client secret for confidential clients.
-        code_verifier: PKCE code verifier.
-        refresh_token: Refresh token (required for refresh_token grant).
-        db: Database session.
-
-    Returns:
-        TokenResponse with tokens.
-
-    Raises:
-        HTTPException: If request is invalid or grant cannot be honored.
     """
-    # Reconstruct TokenRequest object from form fields
+    # Handle Basic Auth header (RFC 6749 Section 2.3.1)
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Basic "):
+        import base64
+        try:
+            encoded_credentials = auth_header[6:]
+            decoded = base64.b64decode(encoded_credentials).decode("utf-8")
+            if ":" in decoded:
+                header_client_id, header_client_secret = decoded.split(":", 1)
+                client_id = client_id or header_client_id
+                client_secret = client_secret or header_client_secret
+        except Exception as e:
+            print(f"[oauth.token] Failed to decode Basic Auth header: {e}")
+
+    # Reconstruct TokenRequest object from form fields and header
     request_body = TokenRequest(
-        grant_type=grant_type,
+        grant_type=grant_type or "",
         code=code,
         redirect_uri=redirect_uri,
-        client_id=client_id,
+        client_id=client_id or "",
         client_secret=client_secret,
         code_verifier=code_verifier,
         refresh_token=refresh_token,
