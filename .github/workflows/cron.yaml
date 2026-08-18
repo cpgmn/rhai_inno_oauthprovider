@@ -1,0 +1,33 @@
+name: Run job at specific time
+
+on:
+  schedule:
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-schedule:
+    name: Schedule
+    runs-on: innovation
+    environment: production
+
+    steps:
+      - name: check marker
+        id: check
+        run: |
+          if [ -f should_deploy_job.txt ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            rm should_deploy_job.txt
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+
+      - name: real job
+        if: steps.check.outputs.should_run == 'true'
+        run: | 
+          cp ~/runner_files/rhai_inno_oauthprovider/* .
+          sudo podman compose down
+          sudo podman compose up -d --build
+
