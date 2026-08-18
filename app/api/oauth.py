@@ -3,6 +3,7 @@
 Implements authorization code flow, token exchange, and userinfo endpoints.
 """
 
+import logging
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -41,6 +42,7 @@ from app.security.validation import (
 from app.auth.service import get_user_by_id
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/authorize")
@@ -82,7 +84,7 @@ async def authorize_get(
         - If user logged in: Authorization code and redirect to redirect_uri
         - If parameters invalid: OAuth error response
     """
-    print(
+    logger.info(
         "[oauth.authorize] "
         f"client_id={client_id!r} "
         f"redirect_uri={redirect_uri!r} "
@@ -91,6 +93,11 @@ async def authorize_get(
 
     # Validate response_type
     if response_type != "code":
+        logger.warning(
+            "[oauth.authorize] invalid response_type client_id=%r response_type=%r",
+            client_id,
+            response_type,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -102,6 +109,7 @@ async def authorize_get(
     # Validate and fetch OAuth client
     client = get_oauth_client(db, client_id)
     if not client:
+        logger.warning("[oauth.authorize] unknown client_id=%r", client_id)
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -112,6 +120,11 @@ async def authorize_get(
 
     # Validate redirect_uri
     if not is_valid_redirect_uri(redirect_uri):
+        logger.warning(
+            "[oauth.authorize] invalid redirect_uri format client_id=%r redirect_uri=%r",
+            client_id,
+            redirect_uri,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -121,6 +134,11 @@ async def authorize_get(
         )
 
     if not validate_redirect_uri(redirect_uri, client.redirect_uris):
+        logger.warning(
+            "[oauth.authorize] redirect_uri not registered client_id=%r redirect_uri=%r",
+            client_id,
+            redirect_uri,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -132,6 +150,12 @@ async def authorize_get(
     # Validate scopes
     is_valid, granted_scopes = validate_scope(scope, client.scopes)
     if not is_valid:
+        logger.warning(
+            "[oauth.authorize] invalid scope client_id=%r requested_scope=%r allowed_scopes=%r",
+            client_id,
+            scope,
+            client.scopes,
+        )
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -146,7 +170,7 @@ async def authorize_get(
 
     if not session:
         # User not logged in – redirect to login page
-        original_url = "/oauth/authorize?" + urlencode({
+        original_url = settings.prefix + "/oauth/authorize?" + urlencode({
             "client_id": client_id,
             "response_type": response_type,
             "redirect_uri": redirect_uri,
@@ -156,11 +180,42 @@ async def authorize_get(
             **({"code_challenge": code_challenge} if code_challenge else {}),
             **({"code_challenge_method": code_challenge_method} if code_challenge_method else {}),
         })
-        login_url = "/login?" + urlencode({"redirect_to": original_url})
+        login_url = settings.prefix + "/login?" + urlencode({"redirect_to": original_url})
+        logger.info(
+            "[oauth.authorize] no session redirect login client_id=%r login_url=%r",
+            client_id,
+            login_url,
+        )
         return RedirectResponse(url=login_url, status_code=302)
 
     # User is logged in – auto-approve and generate authorization code
     user_id = session["user_id"]
+
+    # Enforce onboarding before issuing an authorization code: users who are not
+    # registered or have not accepted the Terms of Use must complete the consent
+    # flow first (accept ToU, confirm AI training, reset password if needed).
+    user = get_user_by_id(db, user_id)
+    if user and (not user.registered or not user.accepted_tou):
+        original_url = settings.prefix + "/oauth/authorize?" + urlencode({
+            "client_id": client_id,
+            "response_type": response_type,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            **({"nonce": nonce} if nonce else {}),
+            **({"code_challenge": code_challenge} if code_challenge else {}),
+            **({"code_challenge_method": code_challenge_method} if code_challenge_method else {}),
+        })
+        consent_url = settings.prefix + "/consent?" + urlencode({"next": original_url})
+        logger.info(
+            "[oauth.authorize] onboarding required redirect consent user_id=%r consent_url=%r",
+            user_id,
+            consent_url,
+        )
+        return RedirectResponse(
+            url=consent_url,
+            status_code=302,
+        )
 
     # Record consent for the user
     record_user_consent(
@@ -184,15 +239,22 @@ async def authorize_get(
 
     # Redirect to callback URI with authorization code and state
     callback_url = f"{redirect_uri}?code={code}&state={state}"
+    logger.info(
+        "[oauth.authorize] issue code redirect callback user_id=%r client_id=%r callback_url=%r",
+        user_id,
+        client_id,
+        callback_url,
+    )
     return RedirectResponse(url=callback_url, status_code=302)
 
 
 @router.post("/token")
 async def token_endpoint(
-    grant_type: str = Form(...),
+    request: Request,
+    grant_type: str | None = Form(None),
     code: str | None = Form(None),
     redirect_uri: str | None = Form(None),
-    client_id: str = Form(...),
+    client_id: str | None = Form(None),
     client_secret: str | None = Form(None),
     code_verifier: str | None = Form(None),
     refresh_token: str | None = Form(None),
@@ -203,29 +265,27 @@ async def token_endpoint(
     Accepts form-encoded OAuth 2.0 token request per RFC 6749.
     Exchanges authorization codes for access/ID/refresh tokens.
     Also handles refresh token exchanges.
-
-    Args:
-        grant_type: 'authorization_code' or 'refresh_token'.
-        code: Authorization code (required for authorization_code grant).
-        redirect_uri: Must match the authorization request.
-        client_id: OAuth client identifier.
-        client_secret: Client secret for confidential clients.
-        code_verifier: PKCE code verifier.
-        refresh_token: Refresh token (required for refresh_token grant).
-        db: Database session.
-
-    Returns:
-        TokenResponse with tokens.
-
-    Raises:
-        HTTPException: If request is invalid or grant cannot be honored.
     """
-    # Reconstruct TokenRequest object from form fields
+    # Handle Basic Auth header (RFC 6749 Section 2.3.1)
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Basic "):
+        import base64
+        try:
+            encoded_credentials = auth_header[6:]
+            decoded = base64.b64decode(encoded_credentials).decode("utf-8")
+            if ":" in decoded:
+                header_client_id, header_client_secret = decoded.split(":", 1)
+                client_id = client_id or header_client_id
+                client_secret = client_secret or header_client_secret
+        except Exception as e:
+            print(f"[oauth.token] Failed to decode Basic Auth header: {e}")
+
+    # Reconstruct TokenRequest object from form fields and header
     request_body = TokenRequest(
-        grant_type=grant_type,
+        grant_type=grant_type or "",
         code=code,
         redirect_uri=redirect_uri,
-        client_id=client_id,
+        client_id=client_id or "",
         client_secret=client_secret,
         code_verifier=code_verifier,
         refresh_token=refresh_token,

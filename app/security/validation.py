@@ -1,6 +1,9 @@
 """URI and scope validation helpers."""
 
+import logging
 import urllib.parse
+
+logger = logging.getLogger(__name__)
 
 
 def _flatten_string_values(values: object) -> list[str]:
@@ -33,13 +36,15 @@ def validate_redirect_uri(redirect_uri: str, allowed_uris: list[str] | object) -
         True if redirect_uri is in allowed_uris, False otherwise.
     """
     normalized_allowed_uris = _flatten_string_values(allowed_uris)
-    print(
+    is_allowed = redirect_uri in normalized_allowed_uris
+    logger.info(
         "[oauth.validate_redirect_uri] "
         f"redirect_uri={redirect_uri!r} "
         f"allowed_uris_raw={allowed_uris!r} "
-        f"allowed_uris_normalized={normalized_allowed_uris!r}"
+        f"allowed_uris_normalized={normalized_allowed_uris!r} "
+        f"allowed={is_allowed!r}"
     )
-    return redirect_uri in normalized_allowed_uris
+    return is_allowed
 
 
 def is_valid_redirect_uri(uri: str) -> bool:
