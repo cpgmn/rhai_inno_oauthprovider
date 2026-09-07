@@ -52,7 +52,7 @@ async def login_page(request: Request) -> str:
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>RhAISE &ndash; Login</title>
+        <title>RhAI &ndash; Login</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
@@ -195,7 +195,7 @@ async def login_page(request: Request) -> str:
                 <div class="logo-area">
                     <img src="{settings.prefix}/static/logo.png" alt="RhAISE Logo">
                 </div>
-                <h2>Sign in to RhAISE</h2>
+                <h2>Sign in to RhAI</h2>
                 {error_html}
                 <form method="POST">
                     <div class="form-group">
@@ -211,7 +211,7 @@ async def login_page(request: Request) -> str:
                     <a href="{settings.prefix}/register" style="display:block;text-align:center;margin-top:16px;font-size:13px;color:var(--rm-light-blue);text-decoration:none;">Request access &rarr;</a>
                 </form>
             </div>
-            <p class="footer-note">RhAISE &mdash; Rheinmetall AI Engineering Suite</p>
+            <p class="footer-note">RhAI &mdash; Rheinmetall AI</p>
         </div>
     </body>
     </html>
